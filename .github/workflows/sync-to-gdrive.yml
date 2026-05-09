@@ -1,0 +1,85 @@
+name: Sync framework to Google Drive
+
+# This workflow runs on every merge to main. It converts the canonical
+# Markdown framework into DOCX and PDF, then uploads them to a Google Drive
+# folder where non-tech WG members can read the latest version.
+#
+# Setup required (one-time, in GitHub repo Settings → Secrets):
+#   GDRIVE_SERVICE_ACCOUNT_JSON  — JSON key for a Google service account
+#                                  with edit access to the target folder.
+#   GDRIVE_FOLDER_ID              — Google Drive folder ID where files
+#                                  should be uploaded.
+#
+# See SETUP.md (root of repo) for service-account creation steps.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'framework/**'
+      - 'annexes/**'
+  workflow_dispatch:   # allow manual run
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Pandoc and LaTeX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-latex-extra
+
+      - name: Generate DOCX
+        run: |
+          mkdir -p build
+          pandoc framework/india_skydiving_framework.md \
+            -f gfm \
+            -o build/ACI_Skydiving_Framework_latest.docx \
+            --toc \
+            --toc-depth=3 \
+            -M title="National Framework for Civilian Skydiving Dropzone Operations in India" \
+            -M subtitle="Working Group Draft — generated from main"
+
+      - name: Generate PDF
+        run: |
+          pandoc framework/india_skydiving_framework.md \
+            -f gfm \
+            -o build/ACI_Skydiving_Framework_latest.pdf \
+            --pdf-engine=xelatex \
+            --toc \
+            --toc-depth=3 \
+            -V geometry:margin=1in \
+            -V mainfont="DejaVu Serif" \
+            -M title="National Framework for Civilian Skydiving Dropzone Operations in India" \
+            -M subtitle="Working Group Draft — generated from main"
+        continue-on-error: true   # PDF generation can be brittle with complex tables
+
+      - name: Upload to Google Drive
+        uses: adityak74/google-drive-upload-git-action@main
+        with:
+          credentials: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          filename: build/ACI_Skydiving_Framework_latest.docx
+          folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
+          name: ACI_Skydiving_Framework_latest.docx
+          overwrite: 'true'
+
+      - name: Upload PDF to Google Drive
+        if: success()
+        uses: adityak74/google-drive-upload-git-action@main
+        continue-on-error: true
+        with:
+          credentials: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          filename: build/ACI_Skydiving_Framework_latest.pdf
+          folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
+          name: ACI_Skydiving_Framework_latest.pdf
+          overwrite: 'true'
+
+      - name: Upload artifacts to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-build
+          path: build/
+          retention-days: 90

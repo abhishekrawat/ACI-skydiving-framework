@@ -1,0 +1,32 @@
+# CODEOWNERS for the ACI Skydiving Framework
+#
+# Every pull request that touches the files listed below will automatically
+# request review from the listed owner(s). Combined with branch protection
+# (require review from CODEOWNERS), this enforces that no change reaches
+# `main` without the WG Chair's approval.
+#
+# Syntax: <pattern>  <owner1> <owner2> ...
+# Owners are GitHub usernames prefixed with @.
+
+# Default catch-all: everything requires the Chair
+*                                @abhishekrawat
+
+# Framework canonical document — Chair only
+/framework/                      @abhishekrawat
+
+# Annexes (forms, scorecards, templates) — Chair only
+/annexes/                        @abhishekrawat
+
+# Decision Records — Chair only (ADRs are append-only and approval-critical)
+/decisions/                      @abhishekrawat
+
+# GitHub config and automation — Chair only
+/.github/                        @abhishekrawat
+/CODEOWNERS                      @abhishekrawat
+/CONTRIBUTING.md                 @abhishekrawat
+/SCRIBE_PROCESS.md               @abhishekrawat
+/README.md                       @abhishekrawat
+
+# Meeting notes — append-only, lighter governance acceptable
+# (Still requires Chair, but added here for clarity if delegated later)
+/meeting-notes/                  @abhishekrawat

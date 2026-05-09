@@ -1,0 +1,44 @@
+name: PR validation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v16
+        with:
+          globs: |
+            framework/**/*.md
+            annexes/**/*.md
+            decisions/**/*.md
+            *.md
+        continue-on-error: true   # advisory; don't block on style nits
+
+      - name: Check PR template completeness
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || '';
+
+            const required = [
+              { check: /## Summary[\s\S]*?\S/, label: 'Summary' },
+              { check: /## Section reference\(s\)[\s\S]*?§/, label: 'Section reference (must include §)' },
+              { check: /- \[x\].*Correction|- \[x\].*Addition|- \[x\].*Deletion|- \[x\].*Restructure/i, label: 'Change classification (one ticked)' },
+              { check: /## Rationale[\s\S]*?\w{20,}/, label: 'Rationale (substantive)' },
+            ];
+
+            const missing = required.filter(r => !r.check.test(body)).map(r => r.label);
+
+            if (missing.length > 0) {
+              core.setFailed(`PR template incomplete. Missing or unfilled: ${missing.join(', ')}`);
+            } else {
+              core.info('PR template looks complete.');
+            }
