@@ -1,16 +1,18 @@
 name: Sync framework to Google Drive
 
-# This workflow runs on every merge to main. It converts the canonical
-# Markdown framework into DOCX and PDF, then uploads them to a Google Drive
-# folder where non-tech WG members can read the latest version.
+# On every merge to main, convert the canonical Markdown framework into DOCX,
+# then import it into Google Drive AS A NATIVE GOOGLE DOC (not a .docx file)
+# so non-tech WG members can read and comment on it directly in the browser.
 #
 # Setup required (one-time, in GitHub repo Settings → Secrets):
 #   GDRIVE_SERVICE_ACCOUNT_JSON  — JSON key for a Google service account
-#                                  with edit access to the target folder.
-#   GDRIVE_FOLDER_ID              — Google Drive folder ID where files
-#                                  should be uploaded.
+#                                  with Editor access to the target folder.
+#   GDRIVE_FOLDER_ID              — Google Drive folder ID where the Doc lives.
+#                                  Just the ID, not the full URL.
+#   GDRIVE_DOC_NAME               — (optional) Name of the Doc. Defaults to
+#                                  "ACI Skydiving Framework — Latest Draft".
 #
-# See SETUP.md (root of repo) for service-account creation steps.
+# See SETUP.md for service-account creation steps.
 
 on:
   push:
@@ -27,59 +29,116 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Pandoc and LaTeX
+      - name: Install Pandoc
         run: |
           sudo apt-get update
-          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-latex-extra
+          sudo apt-get install -y pandoc
 
       - name: Generate DOCX
         run: |
           mkdir -p build
           pandoc framework/india_skydiving_framework.md \
             -f gfm \
-            -o build/ACI_Skydiving_Framework_latest.docx \
+            -o build/framework.docx \
             --toc \
             --toc-depth=3 \
             -M title="National Framework for Civilian Skydiving Dropzone Operations in India" \
             -M subtitle="Working Group Draft — generated from main"
 
-      - name: Generate PDF
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Google API libraries
         run: |
-          pandoc framework/india_skydiving_framework.md \
-            -f gfm \
-            -o build/ACI_Skydiving_Framework_latest.pdf \
-            --pdf-engine=xelatex \
-            --toc \
-            --toc-depth=3 \
-            -V geometry:margin=1in \
-            -V mainfont="DejaVu Serif" \
-            -M title="National Framework for Civilian Skydiving Dropzone Operations in India" \
-            -M subtitle="Working Group Draft — generated from main"
-        continue-on-error: true   # PDF generation can be brittle with complex tables
+          pip install --quiet google-api-python-client google-auth
 
-      - name: Upload to Google Drive
-        uses: adityak74/google-drive-upload-git-action@main
-        with:
-          credentials: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
-          filename: build/ACI_Skydiving_Framework_latest.docx
-          folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
-          name: ACI_Skydiving_Framework_latest.docx
-          overwrite: 'true'
+      - name: Import DOCX as native Google Doc
+        env:
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_DOC_NAME: ${{ secrets.GDRIVE_DOC_NAME }}
+        run: |
+          python3 <<'PYEOF'
+          import json
+          import os
+          import sys
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
 
-      - name: Upload PDF to Google Drive
-        if: success()
-        uses: adityak74/google-drive-upload-git-action@main
-        continue-on-error: true
-        with:
-          credentials: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
-          filename: build/ACI_Skydiving_Framework_latest.pdf
-          folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
-          name: ACI_Skydiving_Framework_latest.pdf
-          overwrite: 'true'
+          sa_json = os.environ.get("GDRIVE_SERVICE_ACCOUNT_JSON", "").strip()
+          folder_id = os.environ.get("GDRIVE_FOLDER_ID", "").strip()
+          doc_name = os.environ.get("GDRIVE_DOC_NAME", "").strip() or "ACI Skydiving Framework — Latest Draft"
 
-      - name: Upload artifacts to GitHub
+          if not sa_json:
+              sys.exit("ERROR: GDRIVE_SERVICE_ACCOUNT_JSON secret is not set.")
+          if not folder_id:
+              sys.exit("ERROR: GDRIVE_FOLDER_ID secret is not set.")
+
+          try:
+              sa_info = json.loads(sa_json)
+          except json.JSONDecodeError as e:
+              sys.exit(f"ERROR: GDRIVE_SERVICE_ACCOUNT_JSON is not valid JSON: {e}")
+
+          creds = service_account.Credentials.from_service_account_info(
+              sa_info,
+              scopes=["https://www.googleapis.com/auth/drive"],
+          )
+          drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+          # Find an existing Doc with this name in the target folder.
+          # We always update the same Doc so the WG's link stays stable.
+          query = (
+              f"name = '{doc_name}' "
+              f"and '{folder_id}' in parents "
+              f"and mimeType = 'application/vnd.google-apps.document' "
+              f"and trashed = false"
+          )
+          existing = drive.files().list(
+              q=query,
+              fields="files(id, name)",
+              supportsAllDrives=True,
+              includeItemsFromAllDrives=True,
+          ).execute().get("files", [])
+
+          # MIME translation: upload a .docx (source mimetype) and tell Drive
+          # to convert it to a native Google Doc (target mimeType in metadata).
+          media = MediaFileUpload(
+              "build/framework.docx",
+              mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              resumable=True,
+          )
+
+          if existing:
+              file_id = existing[0]["id"]
+              drive.files().update(
+                  fileId=file_id,
+                  media_body=media,
+                  supportsAllDrives=True,
+              ).execute()
+              print(f"Updated existing Doc: id={file_id} name='{doc_name}'")
+              print(f"View: https://docs.google.com/document/d/{file_id}/edit")
+          else:
+              metadata = {
+                  "name": doc_name,
+                  "mimeType": "application/vnd.google-apps.document",
+                  "parents": [folder_id],
+              }
+              created = drive.files().create(
+                  body=metadata,
+                  media_body=media,
+                  fields="id, name, webViewLink",
+                  supportsAllDrives=True,
+              ).execute()
+              print(f"Created new Doc: id={created['id']} name='{created['name']}'")
+              print(f"View: {created.get('webViewLink')}")
+          PYEOF
+
+      - name: Upload DOCX as build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: framework-build
-          path: build/
+          name: framework-docx
+          path: build/framework.docx
           retention-days: 90
